@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
@@ -427,18 +427,18 @@ class Compiler:
                     )
                     continue
                 self._expression(statement.initializer)
-                self._emit("STORE", statement.name)
+                self._emit("STORE", statement.name, statement)
                 self.defined.add(statement.name)
             elif isinstance(statement, PrintStatement):
                 self._expression(statement.expression)
-                self._emit("PRINT")
+                self._emit("PRINT", node=statement)
         if not self.diagnostics:
             self._emit("HALT")
         return self.instructions, self.diagnostics
 
     def _expression(self, expression: Any) -> None:
         if isinstance(expression, Literal):
-            self._emit("CONST", expression.value)
+            self._emit("CONST", expression.value, expression)
             return
         if isinstance(expression, Variable):
             if expression.name not in self.defined:
@@ -452,11 +452,11 @@ class Compiler:
                     )
                 )
                 return
-            self._emit("LOAD", expression.name)
+            self._emit("LOAD", expression.name, expression)
             return
         if isinstance(expression, Unary):
             self._expression(expression.operand)
-            self._emit("NEG")
+            self._emit("NEG", node=expression)
             return
         if isinstance(expression, Binary):
             self._expression(expression.left)
@@ -467,13 +467,18 @@ class Compiler:
                     "-": "SUB",
                     "*": "MUL",
                     "/": "DIV",
-                }[expression.operator]
+                }[expression.operator],
+                node=expression,
             )
 
-    def _emit(self, operation: str, argument: Any = None) -> None:
+    def _emit(self, operation: str, argument: Any = None, node: Any = None) -> None:
         instruction: dict[str, Any] = {"op": operation}
         if argument is not None:
             instruction["arg"] = argument
+        if node is not None:
+            # Optional source location so runtime diagnostics point at the
+            # expression or statement that produced the instruction.
+            instruction["loc"] = [node.line, node.column]
         self.instructions.append(instruction)
 
 
@@ -484,57 +489,66 @@ class VM:
         diagnostics = self._validate_artifact(artifact)
         if diagnostics:
             return [], diagnostics
+        output, diagnostics, failed_at = self._execute(artifact["instructions"])
+        if diagnostics and failed_at is not None:
+            loc = artifact["instructions"][failed_at].get("loc")
+            if loc is not None:
+                line, column = loc
+                diagnostics = [replace(d, line=line, column=column, end_column=column + 1) for d in diagnostics]
+        return output, diagnostics
+
+    def _execute(self, instructions: list[dict[str, Any]]) -> tuple[list[str], list[Diagnostic], int | None]:
+        """Run validated instructions; on failure also return the failing index."""
 
         stack: list[Any] = []
         variables: dict[str, Any] = {}
         output: list[str] = []
-        instructions = artifact["instructions"]
         for index, instruction in enumerate(instructions):
             if index >= MAX_INSTRUCTIONS:
-                return [], [Diagnostic("R005", "instruction limit exceeded", 1, 1, 1)]
+                return [], [Diagnostic("R005", "instruction limit exceeded", 1, 1, 1)], index
             operation = instruction["op"]
             argument = instruction.get("arg")
             if operation == "CONST":
                 stack.append(argument)
             elif operation == "STORE":
                 if not stack:
-                    return [], [Diagnostic("R004", "malformed STORE instruction", 1, 1, 1)]
+                    return [], [Diagnostic("R004", "malformed STORE instruction", 1, 1, 1)], index
                 variables[str(argument)] = stack.pop()
             elif operation == "LOAD":
                 name = str(argument)
                 if name not in variables:
-                    return [], [Diagnostic("R001", f"variable {name!r} is not available", 1, 1, 1)]
+                    return [], [Diagnostic("R001", f"variable {name!r} is not available", 1, 1, 1)], index
                 stack.append(variables[name])
             elif operation == "NEG":
                 value, error = self._pop(stack, "NEG")
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 if not isinstance(value, int):
-                    return [], [Diagnostic("R003", "unary '-' requires an integer", 1, 1, 1)]
+                    return [], [Diagnostic("R003", "unary '-' requires an integer", 1, 1, 1)], index
                 if -value > INT_MAX:
-                    return [], [Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)]
+                    return [], [Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)], index
                 stack.append(-value)
             elif operation in {"ADD", "SUB", "MUL", "DIV"}:
                 right, error = self._pop(stack, operation)
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 left, error = self._pop(stack, operation)
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 result, diagnostic = self._binary(left, operation, right)
                 if diagnostic:
-                    return [], [diagnostic]
+                    return [], [diagnostic], index
                 stack.append(result)
             elif operation == "PRINT":
                 value, error = self._pop(stack, "PRINT")
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 output.append(str(value))
             elif operation == "HALT":
-                return output, []
+                return output, [], None
             else:
-                return [], [Diagnostic("R004", f"unknown instruction {operation!r}", 1, 1, 1)]
-        return output, []
+                return [], [Diagnostic("R004", f"unknown instruction {operation!r}", 1, 1, 1)], index
+        return output, [], None
 
     def _validate_artifact(self, artifact: dict[str, Any]) -> list[Diagnostic]:
         if not isinstance(artifact, dict) or artifact.get("format") != ARTIFACT_FORMAT:
@@ -559,6 +573,8 @@ class VM:
                 isinstance(argument, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument)
             ):
                 return [Diagnostic("R004", f"{operation} operand must be an identifier", 1, 1, 1)]
+            if "loc" in instruction and not _valid_loc(instruction["loc"]):
+                return [Diagnostic("R004", "instruction loc must be [line, column] positive integers", 1, 1, 1)]
         return []
 
     @staticmethod
@@ -598,6 +614,14 @@ class VM:
                 return None, Diagnostic("R002", "division by zero", 1, 1, 1)
             return left // right, None
         return None, Diagnostic("R004", f"unsupported binary operation {operation!r}", 1, 1, 1)
+
+
+def _valid_loc(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(part, int) and not isinstance(part, bool) and 1 <= part <= 10**9 for part in value)
+    )
 
 
 def _valid_value(value: Any) -> bool:

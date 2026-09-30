@@ -1,0 +1,15 @@
+{
+  "command": "run",
+  "diagnostics": [
+    {
+      "code": "S001",
+      "column": 11,
+      "end_column": 18,
+      "line": 2,
+      "message": "variable 'missing' is not declared",
+      "severity": "error"
+    }
+  ],
+  "exit_code": 3,
+  "status": "error"
+}

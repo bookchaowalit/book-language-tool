@@ -1,0 +1,10 @@
+{
+  "artifact_sha256": "318802b143bf1ef3bc474c425bd12e235cb08b46e652f160b7c436787c4adef1",
+  "command": "run",
+  "exit_code": 0,
+  "output": [
+    "hello book language",
+    "42"
+  ],
+  "status": "ok"
+}

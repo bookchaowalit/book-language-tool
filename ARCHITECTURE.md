@@ -29,6 +29,12 @@ status: baseline-implemented
 - The digest proves integrity, not origin, so the VM also validates operands:
   `CONST` must be a bounded integer (not bool/float) or string, and
   `LOAD`/`STORE` must name an identifier (`R004` otherwise).
+- Instructions carry an optional `loc: [line, column]` (compiler emits it for
+  every instruction except `HALT`); runtime diagnostics (`R001`–`R007`) report
+  that source position. Artifacts without `loc` stay valid and report `1:1`;
+  a malformed `loc` is rejected with `R004`.
+- `book-lang exec <artifact.json>` runs a saved artifact through the same
+  validation (8 MiB file limit, invalid JSON → `R004`, exit code 4).
 
 ## Resource bounds
 

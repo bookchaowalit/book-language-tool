@@ -28,3 +28,5 @@ jobs:
         run: |
           python -m pip install .
           book-lang run examples/hello.book
+          book-lang compile examples/hello.book --out "$RUNNER_TEMP/hello.ir.json"
+          book-lang exec "$RUNNER_TEMP/hello.ir.json"

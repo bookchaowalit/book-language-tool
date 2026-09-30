@@ -7,13 +7,17 @@ import json
 import sys
 from pathlib import Path
 
-from .core import canonical_json, compile_source, diagnostic_rows, run_source
+from .core import VM, Diagnostic, canonical_json, compile_source, diagnostic_rows, run_source
 
 
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_DIAGNOSTIC = 3
 EXIT_RUNTIME = 4
+
+# A compiled artifact for the 10,000-instruction limit is well under 8 MiB;
+# refuse larger files before parsing them.
+MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,7 +32,48 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
         if command == "compile":
             command_parser.add_argument("--out", type=Path, help="write the deterministic IR artifact to this path")
+    exec_parser = subparsers.add_parser("exec", help="run a compiled IR artifact (JSON)")
+    exec_parser.add_argument("artifact", help="artifact file path, or '-' for stdin")
+    exec_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     return parser
+
+
+def _load_artifact(text: str) -> tuple[object, list[Diagnostic]]:
+    if len(text.encode("utf-8")) > MAX_ARTIFACT_BYTES:
+        return None, [Diagnostic("R004", f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes", 1, 1, 1)]
+    try:
+        return json.loads(text), []
+    except (json.JSONDecodeError, RecursionError):
+        return None, [Diagnostic("R004", "artifact is not valid JSON", 1, 1, 1)]
+
+
+def _exec(args: argparse.Namespace, text: str, label: str) -> int:
+    artifact, diagnostics = _load_artifact(text)
+    output: list[str] = []
+    if not diagnostics:
+        output, diagnostics = VM().run(artifact)  # type: ignore[arg-type]
+    if diagnostics:
+        payload = {"status": "error", "command": "exec", "artifact": label, "diagnostics": diagnostic_rows(diagnostics)}
+        if args.json:
+            _emit(payload, True)
+        else:
+            _print_diagnostics(label, diagnostics)
+        return EXIT_RUNTIME
+    payload = {
+        "status": "ok",
+        "command": "exec",
+        "artifact": label,
+        "artifact_sha256": artifact["artifact_sha256"],  # type: ignore[index]
+        "output": output,
+    }
+    if args.json:
+        _emit(payload, True)
+    else:
+        for line in output:
+            print(line)
+        if not output:
+            print("OK: program produced no output")
+    return EXIT_OK
 
 
 def _read_source(source_path: str) -> tuple[str | None, str | None]:
@@ -59,7 +104,7 @@ def _emit(value: dict, as_json: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    source, source_label = _read_source(args.source)
+    source, source_label = _read_source(args.artifact if args.command == "exec" else args.source)
     if source is None:
         payload = {"status": "error", "command": args.command, "message": source_label}
         if args.json:
@@ -67,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(source_label, file=sys.stderr)
         return EXIT_USAGE
+
+    if args.command == "exec":
+        return _exec(args, source, source_label)
 
     if args.command == "run":
         result = run_source(source)

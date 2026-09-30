@@ -1,0 +1,11 @@
+{
+  "artifact_sha256": "2733c89658a2a40a22e623a215d211fde3bd79f84065a26b8c8977c0ecb2d422",
+  "command": "run",
+  "exit_code": 0,
+  "output": [
+    "hello book",
+    "-20",
+    "3"
+  ],
+  "status": "ok"
+}
