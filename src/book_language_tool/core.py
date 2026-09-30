@@ -14,6 +14,14 @@ from typing import Any
 
 
 MAX_INSTRUCTIONS = 10_000
+# Resource bounds so hostile or accidental programs cannot exhaust memory/CPU
+# or trip Python's int->str digit limit: signed 64-bit integers, 64 KiB strings
+# and 100 levels of expression nesting (keeps the recursive-descent parser
+# and compiler well inside Python's default recursion limit).
+INT_MIN = -(2**63)
+INT_MAX = 2**63 - 1
+MAX_STRING_CHARS = 65_536
+MAX_NESTING_DEPTH = 100
 ARTIFACT_FORMAT = "book-language-tool.ir.v1"
 
 
@@ -149,10 +157,10 @@ class Lexer:
             if char == '"':
                 self._scan_string()
                 continue
-            if char.isdigit():
+            if _is_ascii_digit(char):
                 self._scan_number()
                 continue
-            if char.isalpha() or char == "_":
+            if _is_ascii_letter(char) or char == "_":
                 self._scan_identifier()
                 continue
             kind = self._symbols.get(char)
@@ -199,8 +207,10 @@ class Lexer:
                     break
                 escaped = self._advance()
                 if escaped not in self._escapes:
+                    # Report and keep scanning to the closing quote so the
+                    # rest of the literal does not cascade into L002.
                     self._error("L003", f"unknown string escape \\{escaped}")
-                    return
+                    continue
                 value.append(self._escapes[escaped])
                 continue
             value.append(self._advance())
@@ -209,16 +219,24 @@ class Lexer:
             self._error("L002", "unterminated string literal")
             return
         self._advance()
+        if any(d.code == "L003" and d.line == self.token_line and d.column == self.token_column for d in self.diagnostics):
+            return
+        if len(value) > MAX_STRING_CHARS:
+            self._error("L005", f"string literal exceeds {MAX_STRING_CHARS} characters")
+            return
         self._add_token("STRING", "".join(value))
 
     def _scan_number(self) -> None:
-        while self._peek().isdigit():
+        while _is_ascii_digit(self._peek()):
             self._advance()
         lexeme = self.source[self.start : self.current]
+        if len(lexeme) > 19 or int(lexeme) > INT_MAX:
+            self._error("L004", "integer literal is out of the 64-bit range")
+            return
         self._add_token("NUMBER", int(lexeme))
 
     def _scan_identifier(self) -> None:
-        while self._peek().isalnum() or self._peek() == "_":
+        while _is_ascii_letter(self._peek()) or _is_ascii_digit(self._peek()) or self._peek() == "_":
             self._advance()
         lexeme = self.source[self.start : self.current]
         self._add_token(self._keywords.get(lexeme, "IDENT"), lexeme)
@@ -239,6 +257,15 @@ class Lexer:
         )
 
 
+def _is_ascii_digit(char: str) -> bool:
+    # str.isdigit() accepts "²" or "٣", which int() then rejects.
+    return "0" <= char <= "9"
+
+
+def _is_ascii_letter(char: str) -> bool:
+    return ("a" <= char <= "z") or ("A" <= char <= "Z")
+
+
 class ParseFailure(Exception):
     """Internal parser control flow carrying one user-facing diagnostic."""
 
@@ -253,6 +280,7 @@ class Parser:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens = tokens
         self.current = 0
+        self.depth = 0
         self.diagnostics: list[Diagnostic] = []
 
     def parse(self) -> tuple[list[Any], list[Diagnostic]]:
@@ -261,6 +289,7 @@ class Parser:
             try:
                 statements.append(self._statement())
             except ParseFailure as failure:
+                self.depth = 0
                 self.diagnostics.append(failure.diagnostic)
                 self._synchronize()
         return statements, self.diagnostics
@@ -290,6 +319,11 @@ class Parser:
     def _expression(self) -> Any:
         return self._addition()
 
+    def _enter(self) -> None:
+        self.depth += 1
+        if self.depth > MAX_NESTING_DEPTH:
+            raise self._failure("P008", f"expression nesting exceeds {MAX_NESTING_DEPTH} levels", self._peek())
+
     def _addition(self) -> Any:
         expression = self._multiplication()
         while self._match("PLUS", "MINUS"):
@@ -309,7 +343,10 @@ class Parser:
     def _unary(self) -> Any:
         if self._match("MINUS"):
             operator = self._previous()
-            return Unary(operator.lexeme, self._unary(), operator.line, operator.column)
+            self._enter()
+            operand = self._unary()
+            self.depth -= 1
+            return Unary(operator.lexeme, operand, operator.line, operator.column)
         return self._primary()
 
     def _primary(self) -> Any:
@@ -320,7 +357,9 @@ class Parser:
             token = self._previous()
             return Variable(token.lexeme, token.line, token.column)
         if self._match("LEFT_PAREN"):
+            self._enter()
             expression = self._expression()
+            self.depth -= 1
             self._consume("RIGHT_PAREN", "P006", "expected ')' after expression")
             return expression
         raise self._failure("P007", "expected an integer, string, identifier, or '('", self._peek())
@@ -472,6 +511,8 @@ class VM:
                     return [], [error]
                 if not isinstance(value, int):
                     return [], [Diagnostic("R003", "unary '-' requires an integer", 1, 1, 1)]
+                if -value > INT_MAX:
+                    return [], [Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)]
                 stack.append(-value)
             elif operation in {"ADD", "SUB", "MUL", "DIV"}:
                 right, error = self._pop(stack, operation)
@@ -508,6 +549,16 @@ class VM:
         for instruction in instructions:
             if not isinstance(instruction, dict) or not isinstance(instruction.get("op"), str):
                 return [Diagnostic("R004", "artifact contains an invalid instruction", 1, 1, 1)]
+            # The digest proves integrity, not origin: anyone can re-hash an
+            # edited artifact, so operands are validated like untrusted input.
+            operation = instruction["op"]
+            argument = instruction.get("arg")
+            if operation == "CONST" and not _valid_value(argument):
+                return [Diagnostic("R004", "CONST operand must be a bounded integer or string", 1, 1, 1)]
+            if operation in {"LOAD", "STORE"} and not (
+                isinstance(argument, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument)
+            ):
+                return [Diagnostic("R004", f"{operation} operand must be an identifier", 1, 1, 1)]
         return []
 
     @staticmethod
@@ -518,10 +569,24 @@ class VM:
 
     @staticmethod
     def _binary(left: Any, operation: str, right: Any) -> tuple[Any, Diagnostic | None]:
+        result, diagnostic = VM._binary_unchecked(left, operation, right)
+        if diagnostic is None and not _valid_value(result):
+            if isinstance(result, str):
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters", 1, 1, 1)
+            return None, Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)
+        return result, diagnostic
+
+    @staticmethod
+    def _binary_unchecked(left: Any, operation: str, right: Any) -> tuple[Any, Diagnostic | None]:
         if operation == "ADD" and isinstance(left, str) and isinstance(right, str):
+            if len(left) + len(right) > MAX_STRING_CHARS:
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters", 1, 1, 1)
             return left + right, None
         if not isinstance(left, int) or not isinstance(right, int):
             return None, Diagnostic("R003", f"operator {operation} requires integer operands", 1, 1, 1)
+        if operation == "MUL" and left and right and abs(left) > INT_MAX // abs(right) + 1:
+            # Reject before multiplying so huge products are never materialised.
+            return None, Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)
         if operation == "ADD":
             return left + right, None
         if operation == "SUB":
@@ -533,6 +598,16 @@ class VM:
                 return None, Diagnostic("R002", "division by zero", 1, 1, 1)
             return left // right, None
         return None, Diagnostic("R004", f"unsupported binary operation {operation!r}", 1, 1, 1)
+
+
+def _valid_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return INT_MIN <= value <= INT_MAX
+    if isinstance(value, str):
+        return len(value) <= MAX_STRING_CHARS
+    return False
 
 
 def canonical_json(value: Any) -> str:
