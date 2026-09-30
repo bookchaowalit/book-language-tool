@@ -77,6 +77,22 @@ class ExecCommandTests(unittest.TestCase):
                 self.assertEqual(code, EXIT_RUNTIME)
                 self.assertEqual(json.loads(out)["diagnostics"][0]["code"], "R004")
 
+    def test_artifact_level_errors_have_no_source_position(self) -> None:
+        artifact = json.loads(self.artifact_path.read_text(encoding="utf-8"))
+        artifact["instructions"][0]["arg"] = "tampered"
+        path = self.write(json.dumps(artifact))
+        code, out, _ = cli("exec", path, "--json")
+        row = json.loads(out)["diagnostics"][0]
+        self.assertEqual(code, EXIT_RUNTIME)
+        self.assertEqual((row["line"], row["column"], row["end_column"]), (None, None, None))
+        # Text output omits the position instead of inventing 1:1.
+        code, _, err = cli("exec", path)
+        self.assertEqual(code, EXIT_RUNTIME)
+        self.assertEqual(err.strip(), f"{path}: R004 artifact digest does not match its contents")
+        code, _, err = cli("exec", self.write("{not json"))
+        self.assertNotIn(":1:1:", err)
+        self.assertIn(": R004 artifact is not valid JSON", err)
+
     def test_missing_file_is_usage_error(self) -> None:
         code, _, err = cli("exec", str(Path(self.tmp.name) / "absent.json"))
         self.assertEqual(code, EXIT_USAGE)
@@ -109,7 +125,9 @@ class RuntimeLocationTests(unittest.TestCase):
         assert artifact is not None
         stripped = resign({**artifact, "instructions": [{k: v for k, v in i.items() if k != "loc"} for i in artifact["instructions"]]})
         _, diagnostics = VM().run(stripped)
-        self.assertEqual((diagnostics[0].code, diagnostics[0].line, diagnostics[0].column), ("R002", 1, 1))
+        self.assertEqual((diagnostics[0].code, diagnostics[0].line, diagnostics[0].column), ("R002", None, None))
+        row = diagnostics[0].as_dict()
+        self.assertEqual((row["line"], row["column"], row["end_column"]), (None, None, None))
 
 
 if __name__ == "__main__":

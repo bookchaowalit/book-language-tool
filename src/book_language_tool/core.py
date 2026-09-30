@@ -27,12 +27,25 @@ ARTIFACT_FORMAT = "book-language-tool.ir.v1"
 
 @dataclass(frozen=True)
 class Diagnostic:
+    """A compiler/runtime finding.
+
+    ``line``/``column``/``end_column`` are ``None`` when the finding has no
+    source position (artifact format, digest or operand errors, and runtime
+    errors in artifacts compiled without ``loc``); JSON output then carries
+    ``null`` for all three instead of a fake ``1:1`` (text output omits the
+    position).
+    """
+
     code: str
     message: str
-    line: int
-    column: int
-    end_column: int
+    line: int | None = None
+    column: int | None = None
+    end_column: int | None = None
     severity: str = "error"
+
+    @property
+    def has_location(self) -> bool:
+        return self.line is not None and self.column is not None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -505,28 +518,28 @@ class VM:
         output: list[str] = []
         for index, instruction in enumerate(instructions):
             if index >= MAX_INSTRUCTIONS:
-                return [], [Diagnostic("R005", "instruction limit exceeded", 1, 1, 1)], index
+                return [], [Diagnostic("R005", "instruction limit exceeded")], index
             operation = instruction["op"]
             argument = instruction.get("arg")
             if operation == "CONST":
                 stack.append(argument)
             elif operation == "STORE":
                 if not stack:
-                    return [], [Diagnostic("R004", "malformed STORE instruction", 1, 1, 1)], index
+                    return [], [Diagnostic("R004", "malformed STORE instruction")], index
                 variables[str(argument)] = stack.pop()
             elif operation == "LOAD":
                 name = str(argument)
                 if name not in variables:
-                    return [], [Diagnostic("R001", f"variable {name!r} is not available", 1, 1, 1)], index
+                    return [], [Diagnostic("R001", f"variable {name!r} is not available")], index
                 stack.append(variables[name])
             elif operation == "NEG":
                 value, error = self._pop(stack, "NEG")
                 if error:
                     return [], [error], index
                 if not isinstance(value, int):
-                    return [], [Diagnostic("R003", "unary '-' requires an integer", 1, 1, 1)], index
+                    return [], [Diagnostic("R003", "unary '-' requires an integer")], index
                 if -value > INT_MAX:
-                    return [], [Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)], index
+                    return [], [Diagnostic("R006", "integer overflow (64-bit range)")], index
                 stack.append(-value)
             elif operation in {"ADD", "SUB", "MUL", "DIV"}:
                 right, error = self._pop(stack, operation)
@@ -547,40 +560,40 @@ class VM:
             elif operation == "HALT":
                 return output, [], None
             else:
-                return [], [Diagnostic("R004", f"unknown instruction {operation!r}", 1, 1, 1)], index
+                return [], [Diagnostic("R004", f"unknown instruction {operation!r}")], index
         return output, [], None
 
     def _validate_artifact(self, artifact: dict[str, Any]) -> list[Diagnostic]:
         if not isinstance(artifact, dict) or artifact.get("format") != ARTIFACT_FORMAT:
-            return [Diagnostic("R004", "artifact format is not supported", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact format is not supported")]
         instructions = artifact.get("instructions")
         if not isinstance(instructions, list) or not instructions:
-            return [Diagnostic("R004", "artifact instructions are missing", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact instructions are missing")]
         payload = {key: value for key, value in artifact.items() if key != "artifact_sha256"}
         expected = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
         if artifact.get("artifact_sha256") != expected:
-            return [Diagnostic("R004", "artifact digest does not match its contents", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact digest does not match its contents")]
         for instruction in instructions:
             if not isinstance(instruction, dict) or not isinstance(instruction.get("op"), str):
-                return [Diagnostic("R004", "artifact contains an invalid instruction", 1, 1, 1)]
+                return [Diagnostic("R004", "artifact contains an invalid instruction")]
             # The digest proves integrity, not origin: anyone can re-hash an
             # edited artifact, so operands are validated like untrusted input.
             operation = instruction["op"]
             argument = instruction.get("arg")
             if operation == "CONST" and not _valid_value(argument):
-                return [Diagnostic("R004", "CONST operand must be a bounded integer or string", 1, 1, 1)]
+                return [Diagnostic("R004", "CONST operand must be a bounded integer or string")]
             if operation in {"LOAD", "STORE"} and not (
                 isinstance(argument, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument)
             ):
-                return [Diagnostic("R004", f"{operation} operand must be an identifier", 1, 1, 1)]
+                return [Diagnostic("R004", f"{operation} operand must be an identifier")]
             if "loc" in instruction and not _valid_loc(instruction["loc"]):
-                return [Diagnostic("R004", "instruction loc must be [line, column] positive integers", 1, 1, 1)]
+                return [Diagnostic("R004", "instruction loc must be [line, column] positive integers")]
         return []
 
     @staticmethod
     def _pop(stack: list[Any], operation: str) -> tuple[Any, Diagnostic | None]:
         if not stack:
-            return None, Diagnostic("R004", f"malformed {operation} instruction", 1, 1, 1)
+            return None, Diagnostic("R004", f"malformed {operation} instruction")
         return stack.pop(), None
 
     @staticmethod
@@ -588,21 +601,21 @@ class VM:
         result, diagnostic = VM._binary_unchecked(left, operation, right)
         if diagnostic is None and not _valid_value(result):
             if isinstance(result, str):
-                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters", 1, 1, 1)
-            return None, Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters")
+            return None, Diagnostic("R006", "integer overflow (64-bit range)")
         return result, diagnostic
 
     @staticmethod
     def _binary_unchecked(left: Any, operation: str, right: Any) -> tuple[Any, Diagnostic | None]:
         if operation == "ADD" and isinstance(left, str) and isinstance(right, str):
             if len(left) + len(right) > MAX_STRING_CHARS:
-                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters", 1, 1, 1)
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters")
             return left + right, None
         if not isinstance(left, int) or not isinstance(right, int):
-            return None, Diagnostic("R003", f"operator {operation} requires integer operands", 1, 1, 1)
+            return None, Diagnostic("R003", f"operator {operation} requires integer operands")
         if operation == "MUL" and left and right and abs(left) > INT_MAX // abs(right) + 1:
             # Reject before multiplying so huge products are never materialised.
-            return None, Diagnostic("R006", "integer overflow (64-bit range)", 1, 1, 1)
+            return None, Diagnostic("R006", "integer overflow (64-bit range)")
         if operation == "ADD":
             return left + right, None
         if operation == "SUB":
@@ -611,9 +624,9 @@ class VM:
             return left * right, None
         if operation == "DIV":
             if right == 0:
-                return None, Diagnostic("R002", "division by zero", 1, 1, 1)
+                return None, Diagnostic("R002", "division by zero")
             return left // right, None
-        return None, Diagnostic("R004", f"unsupported binary operation {operation!r}", 1, 1, 1)
+        return None, Diagnostic("R004", f"unsupported binary operation {operation!r}")
 
 
 def _valid_loc(value: Any) -> bool:

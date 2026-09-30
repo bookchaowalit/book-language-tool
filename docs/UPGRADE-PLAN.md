@@ -1,6 +1,6 @@
 # Upgrade Plan
 
-**Current state: 7.5/10** — small, readable compiler/VM with stable
+**Current state: 8/10** (pass 3: 7.5 -> 8) — small, readable compiler/VM with stable
 diagnostics, resource bounds, source-located runtime errors, `exec` for saved
 IR, golden-file tests and CI; language surface is still minimal.
 
@@ -10,13 +10,12 @@ IR, golden-file tests and CI; language surface is still minimal.
 - (none open)
 
 ### P1
-- Artifact-level diagnostics (`R004` digest/format) still report `1:1`;
-  consider a distinct `location: null` in JSON output for non-source errors.
-- `mypy --strict src` in CI (code is already fully annotated).
+- Language growth, first step: comparison operators (`<`, `==`, ...)
+  producing integers 0/1, with lexer/parser/VM tests and a golden program.
 
 ### P2
-- Language growth in small steps: comparison operators, `if`, then bounded
-  `while` (the instruction limit already caps loops).
+- Then `if`, then bounded `while` (the instruction limit already caps
+  loops); add jump operand validation (`R004`) for re-signed artifacts.
 
 ## Done in this pass (2026-09-30)
 - Crash fixes (Python tracebacks instead of diagnostics): Unicode digits
@@ -40,3 +39,15 @@ IR, golden-file tests and CI; language surface is still minimal.
 - Golden-file tests (`tests/test_golden.py`, `tests/golden/`) for examples
   plus runtime/semantic/arithmetic programs; `UPDATE_GOLDEN=1` regenerates.
 - Tests 25 → 36.
+
+## Done in this pass (pass 3)
+- Diagnostics without a source position (artifact format/digest/operand
+  errors, invalid JSON, runtime errors in loc-less artifacts) no longer
+  claim `1:1`: `Diagnostic.line/column/end_column` are optional, JSON emits
+  `null`, text output prints `file: CODE message`. Source diagnostics and
+  golden files are unchanged.
+- `mypy --strict` clean (fixed 5 findings in `cli.py`: untyped `list`/`dict`,
+  `_read_source` label is always `str`); `[tool.mypy]` config, `make
+  typecheck`, and a pinned CI step (`mypy==2.3.1`).
+- Tests 36 -> 37 (JSON nulls + text output for tampered/invalid artifacts;
+  loc-less runtime error now asserts `None`). ruff 0.15.8/0.16.9 clean.

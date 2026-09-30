@@ -18,6 +18,8 @@ jobs:
           python-version: "3.11"
       - name: Lint (pyflakes rules)
         run: pipx run ruff check --select F src tests
+      - name: Type check (mypy --strict, config in pyproject.toml)
+        run: pipx run --spec mypy==2.3.1 mypy
       - name: Check example program
         run: make check
       - name: Unit tests

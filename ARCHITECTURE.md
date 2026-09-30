@@ -31,8 +31,11 @@ status: baseline-implemented
   `LOAD`/`STORE` must name an identifier (`R004` otherwise).
 - Instructions carry an optional `loc: [line, column]` (compiler emits it for
   every instruction except `HALT`); runtime diagnostics (`R001`–`R007`) report
-  that source position. Artifacts without `loc` stay valid and report `1:1`;
-  a malformed `loc` is rejected with `R004`.
+  that source position. Artifacts without `loc` stay valid; their runtime
+  errors, like artifact-level errors (format, digest, operands, invalid
+  JSON), have no source position: JSON diagnostics carry `line`, `column`
+  and `end_column` as `null` and text output prints `file: CODE message`
+  without a fake `1:1`. A malformed `loc` is rejected with `R004`.
 - `book-lang exec <artifact.json>` runs a saved artifact through the same
   validation (8 MiB file limit, invalid JSON → `R004`, exit code 4).
 

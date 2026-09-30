@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from .core import VM, Diagnostic, canonical_json, compile_source, diagnostic_rows, run_source
 
@@ -40,11 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_artifact(text: str) -> tuple[object, list[Diagnostic]]:
     if len(text.encode("utf-8")) > MAX_ARTIFACT_BYTES:
-        return None, [Diagnostic("R004", f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes", 1, 1, 1)]
+        return None, [Diagnostic("R004", f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes")]
     try:
         return json.loads(text), []
     except (json.JSONDecodeError, RecursionError):
-        return None, [Diagnostic("R004", "artifact is not valid JSON", 1, 1, 1)]
+        return None, [Diagnostic("R004", "artifact is not valid JSON")]
 
 
 def _exec(args: argparse.Namespace, text: str, label: str) -> int:
@@ -76,7 +77,8 @@ def _exec(args: argparse.Namespace, text: str, label: str) -> int:
     return EXIT_OK
 
 
-def _read_source(source_path: str) -> tuple[str | None, str | None]:
+def _read_source(source_path: str) -> tuple[str | None, str]:
+    """Return ``(text, label)``, or ``(None, error message)`` when unreadable."""
     if source_path == "-":
         return sys.stdin.read(), "<stdin>"
     path = Path(source_path)
@@ -86,16 +88,16 @@ def _read_source(source_path: str) -> tuple[str | None, str | None]:
         return None, f"cannot read {path}: {exc}"
 
 
-def _print_diagnostics(source_label: str, diagnostics: list) -> None:
+def _print_diagnostics(source_label: str, diagnostics: list[Diagnostic]) -> None:
     for diagnostic in diagnostics:
+        position = f"{diagnostic.line}:{diagnostic.column}:" if diagnostic.has_location else ""
         print(
-            f"{source_label}:{diagnostic.line}:{diagnostic.column}: "
-            f"{diagnostic.code} {diagnostic.message}",
+            f"{source_label}:{position} {diagnostic.code} {diagnostic.message}",
             file=sys.stderr,
         )
 
 
-def _emit(value: dict, as_json: bool) -> None:
+def _emit(value: dict[str, Any], as_json: bool) -> None:
     if as_json:
         print(json.dumps(value, ensure_ascii=False, indent=2))
     else:

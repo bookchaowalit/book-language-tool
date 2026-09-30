@@ -70,6 +70,7 @@ Machine-readable output is available with `--json`. Exit codes are:
 make check
 make test
 make demo
+make typecheck   # needs mypy; strict settings live in pyproject.toml
 ```
 
 The source is split into lexer/parser/compiler/VM logic in
@@ -82,8 +83,8 @@ saved/tampered artifacts, runtime source locations, and golden files
 (`tests/golden/*.expected.json`, regenerate with `UPDATE_GOLDEN=1 make test`
 and review the diff). See
 [ARCHITECTURE.md](ARCHITECTURE.md#resource-bounds) for the limits. CI
-(`.github/workflows/ci.yml`) runs ruff, `make check`, `make test` and
-`make demo` on every push.
+(`.github/workflows/ci.yml`) runs ruff, `mypy --strict` (pinned),
+`make check`, `make test` and `make demo` on every push.
 
 ## Role and step handoff
 
