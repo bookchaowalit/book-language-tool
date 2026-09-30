@@ -32,7 +32,7 @@ Expected baseline result:
 
 ## Observed result — 2026-09-06
 
-- `unittest`: 8 tests passed;
+- `unittest`: 25 tests passed (incl. `tests/test_limits_and_validation.py`);
 - `check examples/hello.book`: exit `0`;
 - `run examples/hello.book`: printed `hello book language` and `42`;
 - `check examples/invalid.book --json`: exit `3`, diagnostic code `P007`;

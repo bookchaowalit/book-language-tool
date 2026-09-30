@@ -26,6 +26,21 @@ status: baseline-implemented
 - Runtime verifies the digest before executing instructions.
 - The VM has no instruction for shell, Python, filesystem, network, or process
   execution.
+- The digest proves integrity, not origin, so the VM also validates operands:
+  `CONST` must be a bounded integer (not bool/float) or string, and
+  `LOAD`/`STORE` must name an identifier (`R004` otherwise).
+
+## Resource bounds
+
+| Bound | Limit | Diagnostic |
+|---|---|---|
+| Integer literals and results | signed 64-bit (`-2^63 .. 2^63-1`) | `L004` literal, `R006` overflow |
+| String literals and concatenation | 65,536 characters | `L005` literal, `R007` result |
+| Expression nesting (parentheses / unary `-`) | 100 levels | `P008` |
+| Executed instructions | 10,000 | `R005` |
+
+Identifiers and numbers are ASCII-only; other characters (e.g. `²`, `٣`) are
+`L001`. Integer `/` uses floor division (`7 / 2` → `3`, `-7 / 2` → `-4`).
 
 ## Recovery and compatibility
 
