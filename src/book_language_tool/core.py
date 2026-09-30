@@ -191,7 +191,9 @@ class Lexer:
     def _advance(self) -> str:
         char = self.source[self.current]
         self.current += 1
-        if char == "\n":
+        # "\n" and a lone "\r" (classic Mac line ending) end a line; the "\r"
+        # of a "\r\n" pair is an ordinary column so the pair counts once.
+        if char == "\n" or (char == "\r" and self._peek() != "\n"):
             self.line += 1
             self.column = 1
         else:
@@ -205,13 +207,14 @@ class Lexer:
         return "\0" if self.current + 1 >= len(self.source) else self.source[self.current + 1]
 
     def _skip_comment(self) -> None:
-        while self._peek() not in ("\n", "\0"):
+        # Stop at a lone CR too, or a CR-only file is one long comment.
+        while self._peek() not in ("\n", "\r", "\0"):
             self._advance()
 
     def _scan_string(self) -> None:
         value: list[str] = []
         while not self._at_end() and self._peek() != '"':
-            if self._peek() == "\n":
+            if self._peek() in ("\n", "\r"):
                 self._error("L002", "string literal cannot contain a raw newline")
                 return
             if self._peek() == "\\":

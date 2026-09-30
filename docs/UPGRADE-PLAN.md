@@ -51,3 +51,8 @@ IR, golden-file tests and CI; language surface is still minimal.
   typecheck`, and a pinned CI step (`mypy==2.3.1`).
 - Tests 36 -> 37 (JSON nulls + text output for tampered/invalid artifacts;
   loc-less runtime error now asserts `None`). ruff 0.15.8/0.16.9 clean.
+- Lexer line endings: a lone CR (classic Mac) did not end a line, so a
+  CR-only file was a single line and a `#` comment swallowed every following
+  statement; diagnostics also reported line 1. A lone CR now ends a line (the
+  CR of CRLF still counts once), comments stop at it, and a raw CR inside a
+  string literal is `L002` like a raw LF. `LexerTests.test_lone_cr_ends_a_line`.

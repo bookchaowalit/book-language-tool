@@ -56,6 +56,15 @@ class LexerTests(unittest.TestCase):
     def test_comments_are_ignored(self) -> None:
         self.assertEqual(run_source("# note\nprint(1); # trailing\n").output, ["1"])
 
+    def test_lone_cr_ends_a_line(self) -> None:
+        # A CR-only file used to be one line, so a comment swallowed the rest.
+        self.assertEqual(run_source("# note\rprint(1);\rprint(2);").output, ["1", "2"])
+        result = compile_source("print(1);\rprint(x);")
+        self.assertEqual([(d.code, d.line, d.column) for d in result.diagnostics], [("S001", 2, 7)])
+        crlf = compile_source("print(1);\r\nprint(x);")
+        self.assertEqual([(d.line, d.column) for d in crlf.diagnostics], [(2, 7)])
+        self.assertEqual(codes(compile_source('print("a\rb");'))[0], "L002")
+
 
 class ParserTests(unittest.TestCase):
     def test_deep_nesting_is_bounded(self) -> None:
