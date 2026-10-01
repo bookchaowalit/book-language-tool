@@ -1,0 +1,15 @@
+{
+  "command": "run",
+  "diagnostics": [
+    {
+      "code": "P007",
+      "column": 18,
+      "end_column": 19,
+      "line": 1,
+      "message": "expected an integer, string, identifier, or '('",
+      "severity": "error"
+    }
+  ],
+  "exit_code": 3,
+  "status": "error"
+}

@@ -9,22 +9,43 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
 MAX_INSTRUCTIONS = 10_000
+# Resource bounds so hostile or accidental programs cannot exhaust memory/CPU
+# or trip Python's int->str digit limit: signed 64-bit integers, 64 KiB strings
+# and 100 levels of expression nesting (keeps the recursive-descent parser
+# and compiler well inside Python's default recursion limit).
+INT_MIN = -(2**63)
+INT_MAX = 2**63 - 1
+MAX_STRING_CHARS = 65_536
+MAX_NESTING_DEPTH = 100
 ARTIFACT_FORMAT = "book-language-tool.ir.v1"
 
 
 @dataclass(frozen=True)
 class Diagnostic:
+    """A compiler/runtime finding.
+
+    ``line``/``column``/``end_column`` are ``None`` when the finding has no
+    source position (artifact format, digest or operand errors, and runtime
+    errors in artifacts compiled without ``loc``); JSON output then carries
+    ``null`` for all three instead of a fake ``1:1`` (text output omits the
+    position).
+    """
+
     code: str
     message: str
-    line: int
-    column: int
-    end_column: int
+    line: int | None = None
+    column: int | None = None
+    end_column: int | None = None
     severity: str = "error"
+
+    @property
+    def has_location(self) -> bool:
+        return self.line is not None and self.column is not None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -149,10 +170,10 @@ class Lexer:
             if char == '"':
                 self._scan_string()
                 continue
-            if char.isdigit():
+            if _is_ascii_digit(char):
                 self._scan_number()
                 continue
-            if char.isalpha() or char == "_":
+            if _is_ascii_letter(char) or char == "_":
                 self._scan_identifier()
                 continue
             kind = self._symbols.get(char)
@@ -170,7 +191,9 @@ class Lexer:
     def _advance(self) -> str:
         char = self.source[self.current]
         self.current += 1
-        if char == "\n":
+        # "\n" and a lone "\r" (classic Mac line ending) end a line; the "\r"
+        # of a "\r\n" pair is an ordinary column so the pair counts once.
+        if char == "\n" or (char == "\r" and self._peek() != "\n"):
             self.line += 1
             self.column = 1
         else:
@@ -184,13 +207,14 @@ class Lexer:
         return "\0" if self.current + 1 >= len(self.source) else self.source[self.current + 1]
 
     def _skip_comment(self) -> None:
-        while self._peek() not in ("\n", "\0"):
+        # Stop at a lone CR too, or a CR-only file is one long comment.
+        while self._peek() not in ("\n", "\r", "\0"):
             self._advance()
 
     def _scan_string(self) -> None:
         value: list[str] = []
         while not self._at_end() and self._peek() != '"':
-            if self._peek() == "\n":
+            if self._peek() in ("\n", "\r"):
                 self._error("L002", "string literal cannot contain a raw newline")
                 return
             if self._peek() == "\\":
@@ -199,8 +223,10 @@ class Lexer:
                     break
                 escaped = self._advance()
                 if escaped not in self._escapes:
+                    # Report and keep scanning to the closing quote so the
+                    # rest of the literal does not cascade into L002.
                     self._error("L003", f"unknown string escape \\{escaped}")
-                    return
+                    continue
                 value.append(self._escapes[escaped])
                 continue
             value.append(self._advance())
@@ -209,16 +235,24 @@ class Lexer:
             self._error("L002", "unterminated string literal")
             return
         self._advance()
+        if any(d.code == "L003" and d.line == self.token_line and d.column == self.token_column for d in self.diagnostics):
+            return
+        if len(value) > MAX_STRING_CHARS:
+            self._error("L005", f"string literal exceeds {MAX_STRING_CHARS} characters")
+            return
         self._add_token("STRING", "".join(value))
 
     def _scan_number(self) -> None:
-        while self._peek().isdigit():
+        while _is_ascii_digit(self._peek()):
             self._advance()
         lexeme = self.source[self.start : self.current]
+        if len(lexeme) > 19 or int(lexeme) > INT_MAX:
+            self._error("L004", "integer literal is out of the 64-bit range")
+            return
         self._add_token("NUMBER", int(lexeme))
 
     def _scan_identifier(self) -> None:
-        while self._peek().isalnum() or self._peek() == "_":
+        while _is_ascii_letter(self._peek()) or _is_ascii_digit(self._peek()) or self._peek() == "_":
             self._advance()
         lexeme = self.source[self.start : self.current]
         self._add_token(self._keywords.get(lexeme, "IDENT"), lexeme)
@@ -239,6 +273,15 @@ class Lexer:
         )
 
 
+def _is_ascii_digit(char: str) -> bool:
+    # str.isdigit() accepts "²" or "٣", which int() then rejects.
+    return "0" <= char <= "9"
+
+
+def _is_ascii_letter(char: str) -> bool:
+    return ("a" <= char <= "z") or ("A" <= char <= "Z")
+
+
 class ParseFailure(Exception):
     """Internal parser control flow carrying one user-facing diagnostic."""
 
@@ -253,6 +296,7 @@ class Parser:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens = tokens
         self.current = 0
+        self.depth = 0
         self.diagnostics: list[Diagnostic] = []
 
     def parse(self) -> tuple[list[Any], list[Diagnostic]]:
@@ -261,6 +305,7 @@ class Parser:
             try:
                 statements.append(self._statement())
             except ParseFailure as failure:
+                self.depth = 0
                 self.diagnostics.append(failure.diagnostic)
                 self._synchronize()
         return statements, self.diagnostics
@@ -290,6 +335,11 @@ class Parser:
     def _expression(self) -> Any:
         return self._addition()
 
+    def _enter(self) -> None:
+        self.depth += 1
+        if self.depth > MAX_NESTING_DEPTH:
+            raise self._failure("P008", f"expression nesting exceeds {MAX_NESTING_DEPTH} levels", self._peek())
+
     def _addition(self) -> Any:
         expression = self._multiplication()
         while self._match("PLUS", "MINUS"):
@@ -309,7 +359,10 @@ class Parser:
     def _unary(self) -> Any:
         if self._match("MINUS"):
             operator = self._previous()
-            return Unary(operator.lexeme, self._unary(), operator.line, operator.column)
+            self._enter()
+            operand = self._unary()
+            self.depth -= 1
+            return Unary(operator.lexeme, operand, operator.line, operator.column)
         return self._primary()
 
     def _primary(self) -> Any:
@@ -320,7 +373,9 @@ class Parser:
             token = self._previous()
             return Variable(token.lexeme, token.line, token.column)
         if self._match("LEFT_PAREN"):
+            self._enter()
             expression = self._expression()
+            self.depth -= 1
             self._consume("RIGHT_PAREN", "P006", "expected ')' after expression")
             return expression
         raise self._failure("P007", "expected an integer, string, identifier, or '('", self._peek())
@@ -388,18 +443,18 @@ class Compiler:
                     )
                     continue
                 self._expression(statement.initializer)
-                self._emit("STORE", statement.name)
+                self._emit("STORE", statement.name, statement)
                 self.defined.add(statement.name)
             elif isinstance(statement, PrintStatement):
                 self._expression(statement.expression)
-                self._emit("PRINT")
+                self._emit("PRINT", node=statement)
         if not self.diagnostics:
             self._emit("HALT")
         return self.instructions, self.diagnostics
 
     def _expression(self, expression: Any) -> None:
         if isinstance(expression, Literal):
-            self._emit("CONST", expression.value)
+            self._emit("CONST", expression.value, expression)
             return
         if isinstance(expression, Variable):
             if expression.name not in self.defined:
@@ -413,11 +468,11 @@ class Compiler:
                     )
                 )
                 return
-            self._emit("LOAD", expression.name)
+            self._emit("LOAD", expression.name, expression)
             return
         if isinstance(expression, Unary):
             self._expression(expression.operand)
-            self._emit("NEG")
+            self._emit("NEG", node=expression)
             return
         if isinstance(expression, Binary):
             self._expression(expression.left)
@@ -428,13 +483,18 @@ class Compiler:
                     "-": "SUB",
                     "*": "MUL",
                     "/": "DIV",
-                }[expression.operator]
+                }[expression.operator],
+                node=expression,
             )
 
-    def _emit(self, operation: str, argument: Any = None) -> None:
+    def _emit(self, operation: str, argument: Any = None, node: Any = None) -> None:
         instruction: dict[str, Any] = {"op": operation}
         if argument is not None:
             instruction["arg"] = argument
+        if node is not None:
+            # Optional source location so runtime diagnostics point at the
+            # expression or statement that produced the instruction.
+            instruction["loc"] = [node.line, node.column]
         self.instructions.append(instruction)
 
 
@@ -445,83 +505,120 @@ class VM:
         diagnostics = self._validate_artifact(artifact)
         if diagnostics:
             return [], diagnostics
+        output, diagnostics, failed_at = self._execute(artifact["instructions"])
+        if diagnostics and failed_at is not None:
+            loc = artifact["instructions"][failed_at].get("loc")
+            if loc is not None:
+                line, column = loc
+                diagnostics = [replace(d, line=line, column=column, end_column=column + 1) for d in diagnostics]
+        return output, diagnostics
+
+    def _execute(self, instructions: list[dict[str, Any]]) -> tuple[list[str], list[Diagnostic], int | None]:
+        """Run validated instructions; on failure also return the failing index."""
 
         stack: list[Any] = []
         variables: dict[str, Any] = {}
         output: list[str] = []
-        instructions = artifact["instructions"]
         for index, instruction in enumerate(instructions):
             if index >= MAX_INSTRUCTIONS:
-                return [], [Diagnostic("R005", "instruction limit exceeded", 1, 1, 1)]
+                return [], [Diagnostic("R005", "instruction limit exceeded")], index
             operation = instruction["op"]
             argument = instruction.get("arg")
             if operation == "CONST":
                 stack.append(argument)
             elif operation == "STORE":
                 if not stack:
-                    return [], [Diagnostic("R004", "malformed STORE instruction", 1, 1, 1)]
+                    return [], [Diagnostic("R004", "malformed STORE instruction")], index
                 variables[str(argument)] = stack.pop()
             elif operation == "LOAD":
                 name = str(argument)
                 if name not in variables:
-                    return [], [Diagnostic("R001", f"variable {name!r} is not available", 1, 1, 1)]
+                    return [], [Diagnostic("R001", f"variable {name!r} is not available")], index
                 stack.append(variables[name])
             elif operation == "NEG":
                 value, error = self._pop(stack, "NEG")
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 if not isinstance(value, int):
-                    return [], [Diagnostic("R003", "unary '-' requires an integer", 1, 1, 1)]
+                    return [], [Diagnostic("R003", "unary '-' requires an integer")], index
+                if -value > INT_MAX:
+                    return [], [Diagnostic("R006", "integer overflow (64-bit range)")], index
                 stack.append(-value)
             elif operation in {"ADD", "SUB", "MUL", "DIV"}:
                 right, error = self._pop(stack, operation)
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 left, error = self._pop(stack, operation)
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 result, diagnostic = self._binary(left, operation, right)
                 if diagnostic:
-                    return [], [diagnostic]
+                    return [], [diagnostic], index
                 stack.append(result)
             elif operation == "PRINT":
                 value, error = self._pop(stack, "PRINT")
                 if error:
-                    return [], [error]
+                    return [], [error], index
                 output.append(str(value))
             elif operation == "HALT":
-                return output, []
+                return output, [], None
             else:
-                return [], [Diagnostic("R004", f"unknown instruction {operation!r}", 1, 1, 1)]
-        return output, []
+                return [], [Diagnostic("R004", f"unknown instruction {operation!r}")], index
+        return output, [], None
 
     def _validate_artifact(self, artifact: dict[str, Any]) -> list[Diagnostic]:
         if not isinstance(artifact, dict) or artifact.get("format") != ARTIFACT_FORMAT:
-            return [Diagnostic("R004", "artifact format is not supported", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact format is not supported")]
         instructions = artifact.get("instructions")
         if not isinstance(instructions, list) or not instructions:
-            return [Diagnostic("R004", "artifact instructions are missing", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact instructions are missing")]
         payload = {key: value for key, value in artifact.items() if key != "artifact_sha256"}
         expected = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
         if artifact.get("artifact_sha256") != expected:
-            return [Diagnostic("R004", "artifact digest does not match its contents", 1, 1, 1)]
+            return [Diagnostic("R004", "artifact digest does not match its contents")]
         for instruction in instructions:
             if not isinstance(instruction, dict) or not isinstance(instruction.get("op"), str):
-                return [Diagnostic("R004", "artifact contains an invalid instruction", 1, 1, 1)]
+                return [Diagnostic("R004", "artifact contains an invalid instruction")]
+            # The digest proves integrity, not origin: anyone can re-hash an
+            # edited artifact, so operands are validated like untrusted input.
+            operation = instruction["op"]
+            argument = instruction.get("arg")
+            if operation == "CONST" and not _valid_value(argument):
+                return [Diagnostic("R004", "CONST operand must be a bounded integer or string")]
+            if operation in {"LOAD", "STORE"} and not (
+                isinstance(argument, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument)
+            ):
+                return [Diagnostic("R004", f"{operation} operand must be an identifier")]
+            if "loc" in instruction and not _valid_loc(instruction["loc"]):
+                return [Diagnostic("R004", "instruction loc must be [line, column] positive integers")]
         return []
 
     @staticmethod
     def _pop(stack: list[Any], operation: str) -> tuple[Any, Diagnostic | None]:
         if not stack:
-            return None, Diagnostic("R004", f"malformed {operation} instruction", 1, 1, 1)
+            return None, Diagnostic("R004", f"malformed {operation} instruction")
         return stack.pop(), None
 
     @staticmethod
     def _binary(left: Any, operation: str, right: Any) -> tuple[Any, Diagnostic | None]:
+        result, diagnostic = VM._binary_unchecked(left, operation, right)
+        if diagnostic is None and not _valid_value(result):
+            if isinstance(result, str):
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters")
+            return None, Diagnostic("R006", "integer overflow (64-bit range)")
+        return result, diagnostic
+
+    @staticmethod
+    def _binary_unchecked(left: Any, operation: str, right: Any) -> tuple[Any, Diagnostic | None]:
         if operation == "ADD" and isinstance(left, str) and isinstance(right, str):
+            if len(left) + len(right) > MAX_STRING_CHARS:
+                return None, Diagnostic("R007", f"string exceeds {MAX_STRING_CHARS} characters")
             return left + right, None
         if not isinstance(left, int) or not isinstance(right, int):
-            return None, Diagnostic("R003", f"operator {operation} requires integer operands", 1, 1, 1)
+            return None, Diagnostic("R003", f"operator {operation} requires integer operands")
+        if operation == "MUL" and left and right and abs(left) > INT_MAX // abs(right) + 1:
+            # Reject before multiplying so huge products are never materialised.
+            return None, Diagnostic("R006", "integer overflow (64-bit range)")
         if operation == "ADD":
             return left + right, None
         if operation == "SUB":
@@ -530,9 +627,27 @@ class VM:
             return left * right, None
         if operation == "DIV":
             if right == 0:
-                return None, Diagnostic("R002", "division by zero", 1, 1, 1)
+                return None, Diagnostic("R002", "division by zero")
             return left // right, None
-        return None, Diagnostic("R004", f"unsupported binary operation {operation!r}", 1, 1, 1)
+        return None, Diagnostic("R004", f"unsupported binary operation {operation!r}")
+
+
+def _valid_loc(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(part, int) and not isinstance(part, bool) and 1 <= part <= 10**9 for part in value)
+    )
+
+
+def _valid_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return INT_MIN <= value <= INT_MAX
+    if isinstance(value, str):
+        return len(value) <= MAX_STRING_CHARS
+    return False
 
 
 def canonical_json(value: Any) -> str:

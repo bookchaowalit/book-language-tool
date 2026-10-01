@@ -1,0 +1,5 @@
+# Runtime diagnostics carry the source location of the failing operator.
+let total = 10;
+let parts = 0;
+print("before");
+print(total / parts);

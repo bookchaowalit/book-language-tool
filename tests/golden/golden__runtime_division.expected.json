@@ -1,0 +1,15 @@
+{
+  "command": "run",
+  "diagnostics": [
+    {
+      "code": "R002",
+      "column": 13,
+      "end_column": 14,
+      "line": 5,
+      "message": "division by zero",
+      "severity": "error"
+    }
+  ],
+  "exit_code": 4,
+  "status": "error"
+}

@@ -44,6 +44,7 @@ No dependency installation is required for the baseline:
 ```bash
 PYTHONPATH=src python3 -m book_language_tool.cli check examples/hello.book
 PYTHONPATH=src python3 -m book_language_tool.cli compile examples/hello.book --out /tmp/hello.ir.json
+PYTHONPATH=src python3 -m book_language_tool.cli exec /tmp/hello.ir.json
 PYTHONPATH=src python3 -m book_language_tool.cli run examples/hello.book
 ```
 
@@ -69,13 +70,21 @@ Machine-readable output is available with `--json`. Exit codes are:
 make check
 make test
 make demo
+make typecheck   # needs mypy; strict settings live in pyproject.toml
 ```
 
 The source is split into lexer/parser/compiler/VM logic in
 `src/book_language_tool/core.py` and a thin CLI in
 `src/book_language_tool/cli.py`. Tests are offline `unittest` cases and cover
 happy path, deterministic artifacts, syntax/semantic errors, runtime failure,
-and JSON CLI behavior.
+JSON CLI behavior, resource bounds (64-bit integers, string size, nesting
+depth, instruction count), re-signed artifact operand validation, `exec` of
+saved/tampered artifacts, runtime source locations, and golden files
+(`tests/golden/*.expected.json`, regenerate with `UPDATE_GOLDEN=1 make test`
+and review the diff). See
+[ARCHITECTURE.md](ARCHITECTURE.md#resource-bounds) for the limits. CI
+(`.github/workflows/ci.yml`) runs ruff, `mypy --strict` (pinned),
+`make check`, `make test` and `make demo` on every push.
 
 ## Role and step handoff
 
