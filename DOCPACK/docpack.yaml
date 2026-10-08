@@ -1,0 +1,8 @@
+system_id: bookchaowalit/book-apps/tools/book-language-tool
+prefix: CARD
+brand: "BOOK LANGUAGE TOOL"
+subtitle: "reference app ของ compiler/interpreter ขนาดเล็กแบบ deterministic"
+footer: "Book Language Tool — Product Card"
+color: "#2f4b6e"
+audience: internal
+tier: L0
