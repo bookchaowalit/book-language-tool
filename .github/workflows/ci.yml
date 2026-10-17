@@ -21,7 +21,8 @@ jobs:
     with:
       python-version: "3.11" # lowest supported version (requires-python >=3.11, mypy python_version)
       # mypy --strict over the configured files (src); `mypy .` would also pull in the tests.
-      typecheck-command: mypy
+      # Same pinned version as the shared workflow's default.
+      typecheck-command: uv pip install mypy==2.4.0 && mypy
       # Unit + golden tests, then the CLI smoke run the old workflow did (check, run, compile, exec).
       test-command: >-
         python -m pytest -q
