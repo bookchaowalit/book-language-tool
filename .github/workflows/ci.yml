@@ -20,6 +20,9 @@ jobs:
     uses: bookchaowalit/platform-ci-workflows/.github/workflows/ci-python.yml@c37ef9d113eefb3ed45429717cb7ca201192c3fc # v1.0.1
     with:
       python-version: "3.11" # lowest supported version (requires-python >=3.11, mypy python_version)
+      # Non-editable install, as the old workflow's `pip install .`: the CLI smoke run below
+      # exercises the built package, not the source tree.
+      install-command: uv pip install ".[dev]"
       # mypy --strict over the configured files (src); `mypy .` would also pull in the tests.
       # Same pinned version as the shared workflow's default.
       typecheck-command: uv pip install mypy==2.4.0 && mypy
