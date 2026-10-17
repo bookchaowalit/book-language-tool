@@ -18,7 +18,9 @@ from book_language_tool.core import VM, canonical_json, compile_source, run_sour
 
 class LanguageToolTests(unittest.TestCase):
     def test_compile_and_run(self) -> None:
-        source = (ROOT / "tests" / "fixtures" / "hello.book").read_text(encoding="utf-8")
+        source = (ROOT / "tests" / "fixtures" / "hello.book").read_text(
+            encoding="utf-8"
+        )
         compiled = compile_source(source)
         self.assertEqual(compiled.diagnostics, [])
         self.assertIsNotNone(compiled.artifact)
@@ -30,7 +32,7 @@ class LanguageToolTests(unittest.TestCase):
         self.assertEqual(result.output, ["hello book language", "42"])
 
     def test_artifact_is_deterministic(self) -> None:
-        source = 'let x = (2 + 3) * 4;\nprint(x);\n'
+        source = "let x = (2 + 3) * 4;\nprint(x);\n"
         first = compile_source(source).artifact
         second = compile_source(source).artifact
         self.assertEqual(first, second)
@@ -74,7 +76,9 @@ class LanguageToolTests(unittest.TestCase):
             str(ROOT / "examples" / "hello.book"),
             "--json",
         ]
-        completed = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+        completed = subprocess.run(
+            command, cwd=ROOT, env=env, text=True, capture_output=True, check=False
+        )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["status"], "ok")
@@ -91,7 +95,9 @@ class LanguageToolTests(unittest.TestCase):
             str(ROOT / "examples" / "invalid.book"),
             "--json",
         ]
-        completed = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+        completed = subprocess.run(
+            command, cwd=ROOT, env=env, text=True, capture_output=True, check=False
+        )
         self.assertEqual(completed.returncode, 3)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["diagnostics"][0]["code"], "P007")
