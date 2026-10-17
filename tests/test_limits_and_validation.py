@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from book_language_tool.core import (  # noqa: E402
+from book_language_tool.core import (
     INT_MAX,
     MAX_NESTING_DEPTH,
     MAX_STRING_CHARS,
@@ -27,9 +27,15 @@ def codes(result) -> list[str]:
 
 
 def signed_artifact(instructions: list[dict]) -> dict:
-    payload = {"format": "book-language-tool.ir.v1", "source_sha256": "0" * 64, "instructions": instructions}
+    payload = {
+        "format": "book-language-tool.ir.v1",
+        "source_sha256": "0" * 64,
+        "instructions": instructions,
+    }
     artifact = dict(payload)
-    artifact["artifact_sha256"] = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    artifact["artifact_sha256"] = hashlib.sha256(
+        canonical_json(payload).encode("utf-8")
+    ).hexdigest()
     return artifact
 
 
@@ -60,7 +66,9 @@ class LexerTests(unittest.TestCase):
         # A CR-only file used to be one line, so a comment swallowed the rest.
         self.assertEqual(run_source("# note\rprint(1);\rprint(2);").output, ["1", "2"])
         result = compile_source("print(1);\rprint(x);")
-        self.assertEqual([(d.code, d.line, d.column) for d in result.diagnostics], [("S001", 2, 7)])
+        self.assertEqual(
+            [(d.code, d.line, d.column) for d in result.diagnostics], [("S001", 2, 7)]
+        )
         crlf = compile_source("print(1);\r\nprint(x);")
         self.assertEqual([(d.line, d.column) for d in crlf.diagnostics], [(2, 7)])
         self.assertEqual(codes(compile_source('print("a\rb");'))[0], "L002")
@@ -75,7 +83,9 @@ class ParserTests(unittest.TestCase):
         self.assertIn("P008", codes(unary))
 
     def test_reasonable_nesting_still_works(self) -> None:
-        self.assertEqual(run_source("print(" + "(" * 50 + "7" + ")" * 50 + ");").output, ["7"])
+        self.assertEqual(
+            run_source("print(" + "(" * 50 + "7" + ")" * 50 + ");").output, ["7"]
+        )
         self.assertEqual(run_source("print(--3);").output, ["3"])
 
     def test_recovers_after_error_and_reports_each_statement(self) -> None:
@@ -90,16 +100,26 @@ class RuntimeBoundsTests(unittest.TestCase):
         self.assertEqual(codes(run_source(source)), ["R006"])
 
     def test_repeated_squaring_cannot_exhaust_memory(self) -> None:
-        lines = ["let v0 = 2;"] + [f"let v{i} = v{i-1} * v{i-1};" for i in range(1, 40)] + ["print(v39);"]
+        lines = (
+            ["let v0 = 2;"]
+            + [f"let v{i} = v{i - 1} * v{i - 1};" for i in range(1, 40)]
+            + ["print(v39);"]
+        )
         self.assertEqual(codes(run_source("\n".join(lines))), ["R006"])
 
     def test_addition_and_subtraction_overflow(self) -> None:
         self.assertEqual(codes(run_source(f"print({INT_MAX} + 1);")), ["R006"])
         self.assertEqual(codes(run_source(f"print(-{INT_MAX} - 2);")), ["R006"])
-        self.assertEqual(run_source(f"print(-{INT_MAX} - 1);").output, [str(-INT_MAX - 1)])
+        self.assertEqual(
+            run_source(f"print(-{INT_MAX} - 1);").output, [str(-INT_MAX - 1)]
+        )
 
     def test_string_doubling_is_bounded(self) -> None:
-        lines = ['let s0 = "xxxxxxxx";'] + [f"let s{i} = s{i-1} + s{i-1};" for i in range(1, 20)] + ["print(s19);"]
+        lines = (
+            ['let s0 = "xxxxxxxx";']
+            + [f"let s{i} = s{i - 1} + s{i - 1};" for i in range(1, 20)]
+            + ["print(s19);"]
+        )
         self.assertEqual(codes(run_source("\n".join(lines))), ["R007"])
 
     def test_division_semantics(self) -> None:
@@ -119,7 +139,11 @@ class ArtifactValidationTests(unittest.TestCase):
             [{"op": "CONST", "arg": 1.5}, {"op": "PRINT"}, {"op": "HALT"}],
             [{"op": "CONST", "arg": [1]}, {"op": "PRINT"}, {"op": "HALT"}],
             [{"op": "CONST", "arg": INT_MAX + 1}, {"op": "PRINT"}, {"op": "HALT"}],
-            [{"op": "CONST", "arg": 1}, {"op": "STORE", "arg": "not an ident"}, {"op": "HALT"}],
+            [
+                {"op": "CONST", "arg": 1},
+                {"op": "STORE", "arg": "not an ident"},
+                {"op": "HALT"},
+            ],
             [{"op": "LOAD"}, {"op": "PRINT"}, {"op": "HALT"}],
         ]
         for instructions in bad_programs:
@@ -130,13 +154,22 @@ class ArtifactValidationTests(unittest.TestCase):
 
     def test_valid_resigned_artifact_runs(self) -> None:
         output, diagnostics = VM().run(
-            signed_artifact([{"op": "CONST", "arg": 5}, {"op": "STORE", "arg": "x"},
-                             {"op": "LOAD", "arg": "x"}, {"op": "PRINT"}, {"op": "HALT"}])
+            signed_artifact(
+                [
+                    {"op": "CONST", "arg": 5},
+                    {"op": "STORE", "arg": "x"},
+                    {"op": "LOAD", "arg": "x"},
+                    {"op": "PRINT"},
+                    {"op": "HALT"},
+                ]
+            )
         )
         self.assertEqual((output, diagnostics), (["5"], []))
 
     def test_instruction_limit(self) -> None:
-        instructions = [{"op": "CONST", "arg": 1}, {"op": "PRINT"}] * 6000 + [{"op": "HALT"}]
+        instructions = [{"op": "CONST", "arg": 1}, {"op": "PRINT"}] * 6000 + [
+            {"op": "HALT"}
+        ]
         _, diagnostics = VM().run(signed_artifact(instructions))
         self.assertEqual([d.code for d in diagnostics], ["R005"])
 

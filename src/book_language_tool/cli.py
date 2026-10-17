@@ -8,8 +8,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .core import VM, Diagnostic, canonical_json, compile_source, diagnostic_rows, run_source
-
+from .core import (
+    VM,
+    Diagnostic,
+    canonical_json,
+    compile_source,
+    diagnostic_rows,
+    run_source,
+)
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -30,18 +36,30 @@ def build_parser() -> argparse.ArgumentParser:
     for command in ("check", "compile", "run"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("source", help="source file path, or '-' for stdin")
-        command_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+        command_parser.add_argument(
+            "--json", action="store_true", help="emit machine-readable JSON"
+        )
         if command == "compile":
-            command_parser.add_argument("--out", type=Path, help="write the deterministic IR artifact to this path")
-    exec_parser = subparsers.add_parser("exec", help="run a compiled IR artifact (JSON)")
+            command_parser.add_argument(
+                "--out",
+                type=Path,
+                help="write the deterministic IR artifact to this path",
+            )
+    exec_parser = subparsers.add_parser(
+        "exec", help="run a compiled IR artifact (JSON)"
+    )
     exec_parser.add_argument("artifact", help="artifact file path, or '-' for stdin")
-    exec_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    exec_parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable JSON"
+    )
     return parser
 
 
 def _load_artifact(text: str) -> tuple[object, list[Diagnostic]]:
     if len(text.encode("utf-8")) > MAX_ARTIFACT_BYTES:
-        return None, [Diagnostic("R004", f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes")]
+        return None, [
+            Diagnostic("R004", f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes")
+        ]
     try:
         return json.loads(text), []
     except (json.JSONDecodeError, RecursionError):
@@ -54,7 +72,12 @@ def _exec(args: argparse.Namespace, text: str, label: str) -> int:
     if not diagnostics:
         output, diagnostics = VM().run(artifact)  # type: ignore[arg-type]
     if diagnostics:
-        payload = {"status": "error", "command": "exec", "artifact": label, "diagnostics": diagnostic_rows(diagnostics)}
+        payload = {
+            "status": "error",
+            "command": "exec",
+            "artifact": label,
+            "diagnostics": diagnostic_rows(diagnostics),
+        }
         if args.json:
             _emit(payload, True)
         else:
@@ -90,7 +113,9 @@ def _read_source(source_path: str) -> tuple[str | None, str]:
 
 def _print_diagnostics(source_label: str, diagnostics: list[Diagnostic]) -> None:
     for diagnostic in diagnostics:
-        position = f"{diagnostic.line}:{diagnostic.column}:" if diagnostic.has_location else ""
+        position = (
+            f"{diagnostic.line}:{diagnostic.column}:" if diagnostic.has_location else ""
+        )
         print(
             f"{source_label}:{position} {diagnostic.code} {diagnostic.message}",
             file=sys.stderr,
@@ -106,7 +131,9 @@ def _emit(value: dict[str, Any], as_json: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    source, source_label = _read_source(args.artifact if args.command == "exec" else args.source)
+    source, source_label = _read_source(
+        args.artifact if args.command == "exec" else args.source
+    )
     if source is None:
         payload = {"status": "error", "command": args.command, "message": source_label}
         if args.json:
@@ -136,7 +163,9 @@ def main(argv: list[str] | None = None) -> int:
             "status": "ok",
             "command": "run",
             "source": source_label,
-            "artifact_sha256": result.artifact["artifact_sha256"] if result.artifact else None,
+            "artifact_sha256": result.artifact["artifact_sha256"]
+            if result.artifact
+            else None,
             "output": result.output,
         }
         if args.json:
@@ -165,9 +194,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "compile" and args.out:
         try:
             args.out.parent.mkdir(parents=True, exist_ok=True)
-            args.out.write_text(canonical_json(compiled.artifact) + "\n", encoding="utf-8")
+            args.out.write_text(
+                canonical_json(compiled.artifact) + "\n", encoding="utf-8"
+            )
         except OSError as exc:
-            payload = {"status": "error", "command": "compile", "message": f"cannot write {args.out}: {exc}"}
+            payload = {
+                "status": "error",
+                "command": "compile",
+                "message": f"cannot write {args.out}: {exc}",
+            }
             if args.json:
                 _emit(payload, True)
             else:
@@ -183,11 +218,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             _emit(payload, True)
         else:
-            _emit({"message": f"OK: wrote {args.out} ({compiled.artifact['artifact_sha256']})"}, False)
+            _emit(
+                {
+                    "message": f"OK: wrote {args.out} ({compiled.artifact['artifact_sha256']})"
+                },
+                False,
+            )
         return EXIT_OK
 
     if args.command == "check":
-        payload = {"status": "ok", "command": "check", "source": source_label, "diagnostics": []}
+        payload = {
+            "status": "ok",
+            "command": "check",
+            "source": source_label,
+            "diagnostics": [],
+        }
         if args.json:
             _emit(payload, True)
         else:

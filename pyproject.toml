@@ -9,6 +9,9 @@ description = "A deterministic, local-first toy language compiler and interprete
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 book-lang = "book_language_tool.cli:main"
 
