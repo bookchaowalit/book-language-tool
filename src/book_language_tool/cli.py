@@ -17,7 +17,6 @@ from .core import (
     run_source,
 )
 
-
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_DIAGNOSTIC = 3

@@ -10,8 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
-from typing import Any
-
+from typing import Any, ClassVar
 
 MAX_INSTRUCTIONS = 10_000
 # Resource bounds so hostile or accidental programs cannot exhaust memory/CPU
@@ -132,8 +131,8 @@ class Lexer:
 
     _identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     _number = re.compile(r"[0-9]+")
-    _keywords = {"let": "LET", "print": "PRINT"}
-    _symbols = {
+    _keywords: ClassVar[dict[str, str]] = {"let": "LET", "print": "PRINT"}
+    _symbols: ClassVar[dict[str, str]] = {
         "=": "EQUAL",
         "+": "PLUS",
         "-": "MINUS",
@@ -143,7 +142,13 @@ class Lexer:
         ")": "RIGHT_PAREN",
         ";": "SEMICOLON",
     }
-    _escapes = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+    _escapes: ClassVar[dict[str, str]] = {
+        "n": "\n",
+        "t": "\t",
+        "r": "\r",
+        '"': '"',
+        "\\": "\\",
+    }
 
     def __init__(self, source: str) -> None:
         self.source = source

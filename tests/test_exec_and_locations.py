@@ -14,8 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from book_language_tool.cli import EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, main  # noqa: E402
-from book_language_tool.core import VM, canonical_json, compile_source, run_source  # noqa: E402
+from book_language_tool.cli import EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, main
+from book_language_tool.core import VM, canonical_json, compile_source, run_source
 
 
 def cli(*argv: str) -> tuple[int, str, str]:
